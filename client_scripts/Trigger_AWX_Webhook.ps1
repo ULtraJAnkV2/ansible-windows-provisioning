@@ -4,8 +4,8 @@
 
 # --- CONFIGURACIÓN ---
 # Estos valores serán inyectados por Configurar_Ansible_Cliente.ps1
-$AWX_WEBHOOK_URL = "$AWX_WEBHOOK_URL_PLACEHOLDER"
-$AWX_WEBHOOK_TOKEN = "$AWX_WEBHOOK_TOKEN_PLACEHOLDER"
+$AWX_WEBHOOK_URL = "http://172.25.21.254:31712/api/v2/job_templates/11/github/"
+$AWX_WEBHOOK_TOKEN = "w8oTtasnTJpaTTi0T3WB1LbI5mz20XMmBH7dn4MimSvs7y9YYM"
 $TempPasswordFile = "C:\Windows\Temp\ansible_admin_pass.txt"
 $StatusFilePath = "C:\ProgramData\Ansible\ProvisioningStatus.json"
 $DomainControllerFQDN = "dc01.lafabril.com.ec" # FQDN de un controlador de dominio para verificar conectividad
