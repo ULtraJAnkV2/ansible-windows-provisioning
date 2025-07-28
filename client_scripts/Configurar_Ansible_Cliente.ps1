@@ -12,8 +12,8 @@ $WinRMListenerPort = 5986 # Puerto WinRM HTTPS (5985 es HTTP)
 
 # --- CONFIGURACIÓN DE AWX WEBHOOK ---
 # ¡REEMPLAZA ESTOS VALORES CON LOS DE TU PLANTILLA DE TRABAJO EN AWX!
-$AWX_WEBHOOK_URL = "https://tu_awx_url/api/v2/job_templates/ID_DE_TU_PLANTILLA/webhook/" # <--- ¡ACTUALIZAR ESTO!
-$AWX_WEBHOOK_TOKEN = "TuTokenSecretoDeWebhook" # <--- ¡ACTUALIZAR ESTO!
+$AWX_WEBHOOK_URL = "    http://172.25.21.254:31712/api/v2/job_templates/11/github/" # <--- ¡ACTUALIZAR ESTO!
+$AWX_WEBHOOK_TOKEN = "w8oTtasnTJpaTTi0T3WB1LbI5mz20XMmBH7dn4MimSvs7y9YYM" # <--- ¡ACTUALIZAR ESTO!
 
 # --- CONFIGURACIÓN DE LA TAREA PROGRAMADA ---
 $ScheduledTaskName = "Ansible_Provisioning_Trigger"
