@@ -1,0 +1,191 @@
+---
+# Nombre: provision_windows_client.yml
+# Descripción: Playbook principal ejecutado por AWX para aprovisionar un equipo Windows.
+# Recibe datos del cliente vía webhook (IP, hostname, serial, contraseña de AnsibleAdmin).
+
+- name: Aprovisionamiento de Nuevo Equipo Windows
+  hosts: all # AWX ejecutará esto en el host dinámico que se añada
+  gather_facts: false # No es necesario recopilar hechos aquí, se hará en el siguiente play
+
+  vars:
+    # Estas variables son pasadas por el webhook de AWX
+    # Asegúrate de que los nombres coincidan con los que envías desde el script de PowerShell
+    new_machine_name: "{{ host_name | default('unknown-host') }}"
+    new_machine_ip: "{{ ip_address | default('0.0.0.0') }}"
+    new_machine_serial: "{{ serial_number | default('UNKNOWN') }}"
+    ansible_admin_password_generated: "{{ ansible_admin_password | default('') }}" # Contraseña generada por el cliente
+
+    # Ruta del archivo de estado de la UI en el cliente Windows
+    provisioning_status_file: "C:\\ProgramData\\Ansible\\ProvisioningStatus.json"
+    temp_password_file: "C:\\Windows\\Temp\\ansible_admin_pass.txt"
+
+    # Credenciales de unión al dominio (definidas en group_vars/windows_clients.yml y encriptadas)
+    # Estas se cargarán automáticamente si el host está en el grupo 'windows_clients'
+    # domain_admin_user: "{{ domain_admin_user }}"
+    # domain_admin_password: "{{ domain_admin_password }}"
+
+  tasks:
+    - name: Añadir el nuevo host al inventario de ejecución de Ansible
+      ansible.builtin.add_host:
+        name: "{{ new_machine_name }}"
+        ansible_host: "{{ new_machine_ip }}"
+        groups:
+          - provisioned_windows_clients # Grupo donde se añadirán los hosts aprovisionados
+          - windows_clients # Para cargar las variables de group_vars/windows_clients.yml
+        ansible_user: "AnsibleAdmin" # El usuario local creado por el script de bootstrap
+        ansible_password: "{{ ansible_admin_password_generated }}"
+        ansible_port: 5986 # Puerto HTTPS configurado por el script
+        ansible_connection: winrm
+        ansible_winrm_transport: basic # Usamos Basic ya que el certificado es auto-firmado inicialmente
+        ansible_winrm_server_cert_validation: ignore # Ignorar validación del certificado auto-firmado
+      delegate_to: localhost # Esta tarea se ejecuta en el servidor Ansible (localhost)
+      run_once: true # Asegura que solo se ejecute una vez, incluso si hay múltiples hosts en 'all'
+
+- name: Ejecutar Aprovisionamiento en el Nuevo Equipo Windows
+  hosts: provisioned_windows_clients # Apunta al grupo dinámico creado arriba
+  gather_facts: true # Ahora sí, recopila hechos del host remoto
+
+  collections:
+    - community.windows
+    - ansible.windows # Asegúrate de que ambas colecciones estén instaladas en AWX
+
+  tasks:
+    - name: Eliminar archivo de contraseña temporal en el cliente (¡CRÍTICO DE SEGURIDAD!)
+      community.windows.win_file:
+        path: "{{ temp_password_file }}"
+        state: absent
+      # Esta tarea se ejecuta en el host remoto
+      # delegate_to: "{{ inventory_hostname }}" # No es necesario, ya se ejecuta en el host remoto por defecto
+
+    - name: Actualizar UI: Conectado a AWX, iniciando instalación de apps base
+      community.windows.win_shell: |
+        $status = Get-Content -Path "{{ provisioning_status_file }}" -Raw -Encoding UTF8 | ConvertFrom-Json
+        $status.current_step = "Conectado a AWX. Instalando aplicaciones base..."
+        $status.detail = "Esto puede tardar unos minutos."
+        $status.progress = 55
+        $status.step_details.connect_to_awx = "completed"
+        $status.step_details.install_base_apps = "in_progress"
+        $status.last_update = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        $status | ConvertTo-Json -Compress | Set-Content -Path "{{ provisioning_status_file }}" -Encoding UTF8
+      # delegate_to: "{{ inventory_hostname }}" # Se ejecuta en el host remoto
+
+    - name: Instalar aplicaciones base (ej. navegadores, utilidades)
+      # Aquí irían tus tareas para instalar Chrome, 7-Zip, etc.
+      # Ejemplo:
+      # community.windows.win_package:
+      #   name: "Google Chrome"
+      #   path: "C:\\Temp\\ChromeSetup.msi"
+      #   state: present
+      ansible.builtin.debug:
+        msg: "Simulando instalación de aplicaciones base..."
+
+    - name: Actualizar UI: Instalación de aplicaciones base completada
+      community.windows.win_shell: |
+        $status = Get-Content -Path "{{ provisioning_status_file }}" -Raw -Encoding UTF8 | ConvertFrom-Json
+        $status.current_step = "Aplicaciones base instaladas."
+        $status.detail = "Renombrando equipo y uniendo al dominio."
+        $status.progress = 65
+        $status.step_details.install_base_apps = "completed"
+        $status.step_details.rename_and_join_da = "in_progress"
+        $status.last_update = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        $status | ConvertTo-Json -Compress | Set-Content -Path "{{ provisioning_status_file }}" -Encoding UTF8
+
+    - name: Renombrar el equipo
+      community.windows.win_hostname:
+        name: "LFSA-{{ new_machine_serial }}" # Usar el serial_number del webhook
+        state: present
+      register: rename_result
+
+    - name: Unir el equipo al dominio
+      community.windows.win_domain_membership:
+        name: "LFSA-{{ new_machine_serial }}" # Asegúrate de que el nombre del host después del renombrado sea el mismo
+        domain_join_user: "{{ domain_admin_user }}" # Desde group_vars/windows_clients.yml
+        domain_join_password: "{{ domain_admin_password }}" # Desde group_vars/windows_clients.yml (vaulted)
+        domain: lafabril.com.ec
+        state: present
+        reboot_timeout: 600 # Esperar hasta 10 minutos por el reinicio
+      register: domain_join_result
+
+    - name: Actualizar UI: Equipo renombrado y unido al dominio (completado)
+      community.windows.win_shell: |
+        $status = Get-Content -Path "{{ provisioning_status_file }}" -Raw -Encoding UTF8 | ConvertFrom-Json
+        $status.current_step = "Equipo renombrado y unido al dominio."
+        $status.detail = "Instalando Office y SAP GUI."
+        $status.progress = 80
+        $status.step_details.rename_and_join_da = "completed"
+        $status.step_details.install_sap_gui = "in_progress"
+        $status.step_details.configure_office = "in_progress"
+        $status.last_update = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        $status | ConvertTo-Json -Compress | Set-Content -Path "{{ provisioning_status_file }}" -Encoding UTF8
+      when: domain_join_result.changed or rename_result.changed # Solo si hubo cambio en la unión/renombrado
+
+    - name: Instalar SAP GUI Front-End
+      # Aquí iría tu tarea de instalación de SAP GUI
+      # Asegúrate de que el MSI esté en el directorio 'files/' de tu repositorio
+      community.windows.win_copy:
+        src: files/SAPGUI770_Installer.msi # Ruta en tu repositorio Git
+        dest: C:\Temp\SAPGUI770_Installer.msi
+        force: no
+
+      - community.windows.win_package:
+          path: C:\Temp\SAPGUI770_Installer.msi
+          arguments: /qn /norestart # Argumentos de instalación silenciosa
+          # Propiedades específicas de SAP GUI (¡PERSONALIZA ESTO!)
+          properties:
+            SAP_AUTOMATED_INSTALLATION: 1
+            SAP_SHORTCUTS: "DESKTOP,STARTMENU"
+          state: present
+      ansible.builtin.debug:
+        msg: "Simulando instalación de SAP GUI..."
+
+
+    - name: Copiar scripts de configuración de Office 365
+      community.windows.win_copy:
+        src: "files/{{ item }}"
+        dest: "C:\\ProgramData\\Ansible\\PostLoginScripts\\{{ item }}"
+      loop:
+        - configure_outlook.ps1
+        - configure_onedrive.ps1
+        - configure_teams.ps1
+        - run_all_configs.ps1
+
+    - name: Crear tarea programada para ejecutar scripts de Office al inicio de sesión
+      community.windows.win_scheduled_task:
+        name: "LaFabril_PostLogin_Config"
+        description: "Ejecuta scripts de configuración personalizados al inicio de sesión del usuario."
+        state: present
+        triggers:
+          - type: logon
+            delay: PT30S
+        actions:
+          - path: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+            arguments: -ExecutionPolicy Bypass -File "C:\ProgramData\Ansible\PostLoginScripts\run_all_configs.ps1"
+        run_as_user: SYSTEM # Ejecutar como SYSTEM para que se aplique al perfil de usuario
+        run_level: highest # Para permisos elevados
+
+    - name: Actualizar UI: Proceso de aprovisionamiento completado
+      community.windows.win_shell: |
+        $status = Get-Content -Path "{{ provisioning_status_file }}" -Raw -Encoding UTF8 | ConvertFrom-Json
+        $status.current_step = "¡Aprovisionamiento Completado!"
+        $status.detail = "El equipo está listo para el usuario."
+        $status.progress = 100
+        $status.status = "completed"
+        $status.step_details.install_sap_gui = "completed"
+        $status.step_details.configure_office = "completed"
+        $status.step_details.finished = "completed"
+        $status.last_update = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        $status | ConvertTo-Json -Compress | Set-Content -Path "{{ provisioning_status_file }}" -Encoding UTF8
+
+    - name: Actualizar UI si hay fallos (ejemplo de handler de error)
+      # Esta tarea se ejecutaría si alguna tarea anterior en este play falla.
+      # Puedes configurar un 'block' y 'rescue' para manejar errores de forma más robusta.
+      community.windows.win_shell: |
+        $status = Get-Content -Path "{{ provisioning_status_file }}" -Raw -Encoding UTF8 | ConvertFrom-Json
+        $status.current_step = "Error en el aprovisionamiento."
+        $status.detail = "Contacta a TI para asistencia. Revisa los logs de AWX."
+        $status.progress = 100
+        $status.status = "failed"
+        $status.last_update = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+        $status | ConvertTo-Json -Compress | Set-Content -Path "{{ provisioning_status_file }}" -Encoding UTF8
+      when: ansible_failed_result is defined and ansible_failed_result.failed # Ejecutar si la tarea anterior falló
+      # Asegúrate de que esta tarea se ejecute incluso si otras fallan. Podrías usar 'always' en un block/rescue.
